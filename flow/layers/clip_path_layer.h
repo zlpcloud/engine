@@ -11,22 +11,24 @@ namespace flutter {
 
 class ClipPathLayer : public ContainerLayer {
  public:
-  ClipPathLayer(Clip clip_behavior = Clip::antiAlias);
-  ~ClipPathLayer() override;
-
-  void set_clip_path(const SkPath& clip_path) { clip_path_ = clip_path; }
+  ClipPathLayer(const SkPath& clip_path, Clip clip_behavior = Clip::antiAlias);
 
   void Preroll(PrerollContext* context, const SkMatrix& matrix) override;
 
   void Paint(PaintContext& context) const override;
 
-#if defined(OS_FUCHSIA)
+  bool UsesSaveLayer() const {
+    return clip_behavior_ == Clip::antiAliasWithSaveLayer;
+  }
+
+#if defined(LEGACY_FUCHSIA_EMBEDDER)
   void UpdateScene(SceneUpdateContext& context) override;
-#endif  // defined(OS_FUCHSIA)
+#endif
 
  private:
   SkPath clip_path_;
   Clip clip_behavior_;
+  bool children_inside_clip_ = false;
 
   FML_DISALLOW_COPY_AND_ASSIGN(ClipPathLayer);
 };

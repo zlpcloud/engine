@@ -13,13 +13,14 @@ import 'patterns.dart';
 
 class FetchedContentsOf extends Key { FetchedContentsOf(dynamic value) : super(value); }
 
-enum LicenseType { unknown, bsd, gpl, lgpl, mpl, afl, mit, freetype, apache, apacheNotice, eclipse, ijg, zlib, icu, apsl, libpng, openssl }
+enum LicenseType { unknown, bsd, gpl, lgpl, mpl, afl, mit, freetype, apache, apacheNotice, eclipse, ijg, zlib, icu, apsl, libpng, openssl, vulkan, bison }
 
 LicenseType convertLicenseNameToType(String name) {
   switch (name) {
     case 'Apache':
     case 'apache-license-2.0':
     case 'LICENSE-APACHE-2.0.txt':
+    case 'LICENSE.vulkan':
       return LicenseType.apache;
     case 'BSD':
     case 'BSD.txt':
@@ -45,6 +46,8 @@ LicenseType convertLicenseNameToType(String name) {
     case 'LICENSE.MPLv2':
     case 'COPYING-MPL-1.1':
       return LicenseType.mpl;
+    case 'COPYRIGHT.vulkan':
+      return LicenseType.vulkan;
     // common file names that don't say what the type is
     case 'COPYING':
     case 'COPYING.txt':
@@ -63,6 +66,7 @@ LicenseType convertLicenseNameToType(String name) {
     case 'license.txt':
       return LicenseType.unknown;
     // particularly weird file names
+    case 'COPYRIGHT.musl':
     case 'LICENSE-APPLE':
     case 'extreme.indiana.edu.license.TXT':
     case 'extreme.indiana.edu.license.txt':
@@ -98,6 +102,8 @@ LicenseType convertBodyToType(String body) {
     return LicenseType.zlib;
   if (body.contains(lrPNG))
     return LicenseType.libpng;
+  if (body.contains(lrBison))
+    return LicenseType.bison;
   return LicenseType.unknown;
 }
 
@@ -176,6 +182,7 @@ abstract class License implements Comparable<License> {
     if (!reformatted)
       body = _reformat(body);
     final License result = _registry.putIfAbsent(body, () {
+      assert(type != null);
       switch (type) {
         case LicenseType.bsd:
         case LicenseType.mit:
@@ -195,11 +202,18 @@ abstract class License implements Comparable<License> {
         case LicenseType.ijg:
         case LicenseType.apsl:
           return MessageLicense._(body, type, origin: origin);
+        case LicenseType.vulkan:
         case LicenseType.openssl:
           return MultiLicense._(body, type, origin: origin);
         case LicenseType.libpng:
           return BlankLicense._(body, type, origin: origin);
+        // The exception in the license of Bison allows redistributing larger
+        // works "under terms of your choice"; we choose terms that don't require
+        // any notice in the binary distribution.
+        case LicenseType.bison:
+          return BlankLicense._(body, type, origin: origin);
       }
+      return null;
     });
     assert(result.type == type);
     return result;
@@ -278,6 +292,7 @@ abstract class License implements Comparable<License> {
         type = LicenseType.mpl;
         break;
       case 'http://opensource.org/licenses/MIT':
+      case 'https://opensource.org/licenses/MIT':
       case 'http://opensource->org/licenses/MIT': // i don't even
         body = system.File('data/mit').readAsStringSync();
         type = LicenseType.mit;
@@ -323,9 +338,11 @@ abstract class License implements Comparable<License> {
             assert(this is MessageLicense);
             break;
           case LicenseType.libpng:
+          case LicenseType.bison:
             assert(this is BlankLicense);
             break;
           case LicenseType.openssl:
+          case LicenseType.vulkan:
             assert(this is MultiLicense);
             break;
         }
@@ -335,6 +352,11 @@ abstract class License implements Comparable<License> {
       return true;
     }());
     final LicenseType detectedType = convertBodyToType(body);
+
+    // Fuchsia SDK Vulkan license is Apache 2.0 with some additional BSD-matching copyrights.
+    if (type == LicenseType.vulkan)
+      yesWeKnowWhatItLooksLikeButItIsNot = true;
+
     if (detectedType != LicenseType.unknown && detectedType != type && !yesWeKnowWhatItLooksLikeButItIsNot)
       throw 'Created a license of type $type but it looks like $detectedType\.';
     if (type != LicenseType.apache && type != LicenseType.apacheNotice) {
@@ -373,9 +395,8 @@ abstract class License implements Comparable<License> {
   final String origin;
   final LicenseType type;
 
-  Iterable<String> get licensees => _licensees;
-  final List<String> _licensees = <String>[];
-  final Set<String> _libraries = Set<String>();
+  final Set<String> _licensees = <String>{};
+  final Set<String> _libraries = <String>{};
 
   bool get isUsed => _licensees.isNotEmpty;
 
@@ -397,7 +418,8 @@ abstract class License implements Comparable<License> {
   String toString() {
     final List<String> prefixes = _libraries.toList();
     prefixes.sort();
-    _licensees.sort();
+    final List<String> licensees = _licensees.toList();
+    licensees.sort();
     final List<String> header = <String>[];
     header.addAll(prefixes.map((String s) => 'LIBRARY: $s'));
     header.add('ORIGIN: $origin');
@@ -716,8 +738,18 @@ Iterable<_PartialLicenseMatch> _findLicenseBlocks(String body, RegExp pattern, i
       // examined closer.
       final _SplitLicense sanityCheck = _splitLicense(undecoratedCopyrights, verifyResults: false);
       final String conditions = sanityCheck.getConditions();
-      if (conditions != '')
-        throw 'potential license text caught in _findLicenseBlocks copyright dragnet:\n---\n$conditions\n---\nundecorated copyrights was:\n---\n$undecoratedCopyrights\n---\ncopyrights was:\n---\n$copyrights\n---\nblock was:\n---\n${body.substring(start, match.end)}\n---';
+      if (conditions != '') {
+        // Copyright lines long enough to spill to a second line can create
+        // false positives; try to weed those out.
+        final String resplitCopyright = sanityCheck.getCopyright();
+        if (resplitCopyright.trim().contains('\n') ||
+            conditions.trim().contains('\n') ||
+            resplitCopyright.length < 70 ||
+            conditions.length > 15) {
+          throw 'potential license text caught in _findLicenseBlocks copyright dragnet:\n---\n$conditions\n---\nundecorated copyrights was:\n---\n$undecoratedCopyrights\n---\ncopyrights was:\n---\n$copyrights\n---\nblock was:\n---\n${body.substring(start, match.end)}\n---';
+        }
+      }
+
       if (!copyrights.contains(copyrightMentionPattern))
         throw 'could not find copyright before license block:\n---\ncopyrights was:\n---\n$copyrights\n---\nblock was:\n---\n${body.substring(start, match.end)}\n---';
       if (body[match.start - 1] != '\n')

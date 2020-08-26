@@ -14,9 +14,7 @@
 #include "flutter/lib/ui/painting/vertices.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/utils/SkShadowUtils.h"
-#include "third_party/tonic/typed_data/float32_list.h"
-#include "third_party/tonic/typed_data/float64_list.h"
-#include "third_party/tonic/typed_data/int32_list.h"
+#include "third_party/tonic/typed_data/typed_list.h"
 
 namespace tonic {
 class DartLibraryNatives;
@@ -167,10 +165,11 @@ class Canvas : public RefCountedDartWrappable<Canvas> {
                   bool transparentOccluder);
 
   SkCanvas* canvas() const { return canvas_; }
-  void Clear();
-  bool IsRecording() const;
+  void Invalidate();
 
   static void RegisterNatives(tonic::DartLibraryNatives* natives);
+
+  size_t external_allocation_size() const { return external_allocation_size_; }
 
  private:
   explicit Canvas(SkCanvas* canvas);
@@ -179,6 +178,7 @@ class Canvas : public RefCountedDartWrappable<Canvas> {
   // which does not transfer ownership.  For this reason, we hold a raw
   // pointer and manually set to null in Clear.
   SkCanvas* canvas_;
+  size_t external_allocation_size_ = 0;
 };
 
 }  // namespace flutter
